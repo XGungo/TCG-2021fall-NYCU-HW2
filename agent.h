@@ -147,18 +147,84 @@ class rndenv : public random_agent {
  */
 class player : public random_agent {
    public:
-    player(const std::string& args = "") : random_agent("name=dummy role=player " + args),
-                                           opcode({0, 1, 2, 3}) {}
+    player(const std::string& args = "")
+        : random_agent("name=dummy role=player " + args),
+          opcode({0, 1, 2, 3}),
+          mode(args) {}
 
     virtual action take_action(const board& before) {
         std::shuffle(opcode.begin(), opcode.end(), engine);
-        for (int op : opcode) {
-            board::reward reward = board(before).slide(op);
-            if (reward != -1) return action::slide(op);
+        if (mode == "") {
+            for (int op : opcode) {
+                board::reward reward = board(before).slide(op);
+                if (reward != -1) return action::slide(op);
+            }
+            return action();
+        } else if (mode == "greedy") {
+            int max = 0;
+            int op_to_send = 0;
+            for (int op : opcode) {
+                board::reward reward = board(before).slide(op);
+                if (reward != -1 && reward >= max) {
+                    max = reward;
+                    op_to_send = op;
+                }
+            }
+            return action::slide(op_to_send);
+        } else if (mode == "heuristic") {
+            float max = 0;
+            int op_to_send = 0;
+            for (int op : opcode) {
+                float score = 0;
+                board after = board(before);
+                board::reward reward = after.slide(op);
+                if (reward != -1) {
+                    board::grid& tile = after;
+                    unsigned int max_elem = 0;
+                    int max_at_corner = 0, space_num = 0, monotonic_decreasing = 0, decreasing = 0;
+
+                    // check whether max element is at (0,0).
+                    for (int i = 0; i < 16; i++)
+                        max_elem = (after(i) > max_elem) ? after(i) : max_elem;
+                    max_at_corner = (after(0) == max_elem);
+
+                    // check # of space and row decreasing.
+                    for (auto& row : tile) {
+                        bool flag = 1, dflag = 1;
+                        for (int c = 0; c < 4; c++) {
+                            space_num += (row[c] == 0) ? 1 : 0;
+                            if (c < 3) {
+                                flag *= (row[c] >= row[c + 1]);
+                                dflag *= (row[c] > row[c + 1]);
+                            }
+                        }
+                        monotonic_decreasing += flag;
+                        decreasing += dflag;
+                    }
+                    // check column decreasing.
+                    for (int j = 0; j < 3; j++) {
+                        bool flag = 1, dflag = 1;
+                        for (int i = 0; i < 4; i++) {
+                            flag *= (tile[i][j] >= tile[i][j + 1]);
+                            dflag *= (tile[i][j] > tile[i][j + 1]);
+                        }
+                        monotonic_decreasing += flag;
+                        decreasing += dflag;
+                    }
+
+                    score = 1.0 * reward + 60.0 * max_at_corner + 0 * space_num + .27 * monotonic_decreasing - .05 * decreasing;
+                    if (score >= max) {
+                        max = score;
+                        op_to_send = op;
+                    }
+                }
+            }
+            return action::slide(op_to_send);
         }
         return action();
     }
 
    private:
     std::array<int, 4> opcode;
+    std::string mode;
 };
