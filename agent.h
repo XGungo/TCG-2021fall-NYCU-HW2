@@ -127,12 +127,13 @@ class weight_agent : public agent {
     typedef struct step {
         board state;
         board::reward reward;
+        bool terminated;
 
     } Step;
 
     void td_0(Step last, const board& next) {
         float current = estimate_value(last.state);
-        float target = estimate_value(next) + last.reward;
+        float target = last.terminated ? last.reward : estimate_value(next) + last.reward;
         float error = target - current;
         for (int i = 0; i < features.size(); i++) {
             net[i][extract_feature(last.state, features[i])] += alpha * error;
@@ -161,7 +162,7 @@ class weight_agent : public agent {
                 best_value = value;
             }
         }
-        Step last = {before, best_reward};
+        Step last = {before, best_reward, best_op == -1};
         last_step.emplace_back(last);
         return action::slide(best_op);
     };
