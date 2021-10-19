@@ -115,43 +115,59 @@ class weight_agent : public agent {
         return value;
     };
 
-    void td_0(const board& before, int op) {
-        board after = board(before);
-        int reward = after.slide(op);
-        float target = op == -1 ? 0 : estimate_value(after) + reward;
-        float error = target - estimate_value(before);
+    // void td_0(const board& before, float target) {
+    //     board after = board(before);
+    //     int reward = after.slide(op);
+    //     float target = op == -1 ? 0 : estimate_value(after) + reward;
+    //     float error = target - estimate_value(before);
+    //     for (int i = 0; i < features.size(); i++) {
+    //         net[i][extract_feature(before, features[i])] += alpha * error;
+    //     }
+    // };
+    typedef struct step {
+        board state;
+        board::reward reward;
+
+    } Step;
+
+    void td_0(Step last, const board& next) {
+        float current = estimate_value(last.state);
+        float target = estimate_value(next) + last.reward;
+        float error = target - current;
         for (int i = 0; i < features.size(); i++) {
-            net[i][extract_feature(before, features[i])] += alpha * error;
+            net[i][extract_feature(last.state, features[i])] += alpha * error;
         }
     };
 
     virtual action take_action(const board& before) {
-        // std::cout << extract_feature(before, features[0]) << ' ';
-        // std::cout << net[0][extract_feature(before, features[0])] << '\n';
+
+        if (! last_step.empty()){
+            td_0(last_step.back(), before);
+            last_step.pop_back();
+        }
 
         int best_op = -1;
-        float best_reward = -1;
+        int best_reward = -1;
         float best_value = -100000;
 
         for (int op : {0, 1, 2, 3}) {
             board after = board(before);
-            int reward = after.slide(op);
-            // std::cout <<"op " << op << "reward " << reward<< '\n';
+            board::reward reward = after.slide(op);
             if (reward == -1) continue;
             float value = estimate_value(after);
-            // std::cout <<"value " << value << "reward+value " << reward + value << '\n';
-
             if (reward + value >= best_reward + best_value) {
                 best_op = op;
                 best_reward = reward;
                 best_value = value;
             }
         }
-        // std::cout << '\n';
-        td_0(before, best_op);
+        Step last = {before, best_reward};
+        last_step.emplace_back(last);
         return action::slide(best_op);
     };
-    virtual void open_episode(const std::string& flag = ""){};
+    virtual void open_episode(const std::string& flag = "") {
+        last_step.clear();
+    };
     virtual void close_episode(const std::string& flag = ""){};
 
    protected:
@@ -183,6 +199,7 @@ class weight_agent : public agent {
    protected:
     std::vector<weight> net;
     float alpha;
+    std::vector<Step> last_step;
 };
 /**
  * random environment
