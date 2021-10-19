@@ -21,6 +21,7 @@
 #include "action.h"
 #include "board.h"
 #include "weight.h"
+#define FEATURES_NUM 8
 
 class agent {
    public:
@@ -96,34 +97,42 @@ class weight_agent : public agent {
         {0, 4, 8, 12},
         {1, 5, 9, 13},
         {2, 6, 10, 14},
-        {3, 7, 11, 15}};
+        {3, 7, 11, 15}
+        // {0, 4, 8, 9, 12, 13},
+        // {1, 5, 9, 10, 13, 14},
+        // {1, 2, 5, 6, 9, 10},
+        // {2, 3, 6, 7, 10, 11}
+    };
+    int myPow(int x, unsigned int p) {
+        if (p == 0) return 1;
+        if (p == 1) return x;
 
+        int tmp = myPow(x, p / 2);
+        if (p % 2 == 0)
+            return tmp * tmp;
+        else
+            return x * tmp * tmp;
+    }
     int extract_feature(const board& after, std::vector<int> feature) {
         int idx = 0;
-        for (int i = 0; i < feature.size(); i++) {
-            idx += after(feature[i]) * (int)std::pow(25, feature.size() - i - 1);
+        // for (long unsigned int i = 0; i < feature.size(); i++) {
+        //     idx += after(feature[i]) * myPow(25, feature.size() - i - 1);
+        // }
+        for (long unsigned int i = 0; i < feature.size(); i++) {
+            idx *= 25;
+            idx += after(feature[i]);
         }
         return idx;
     };
 
     float estimate_value(const board& after) {
-        if (check_for_win(after)) return 0;
         float value = 0;
-        for (int i = 0; i < features.size(); i++) {
+        for (int i = 0; i < FEATURES_NUM; i++) {
             value += net[i][extract_feature(after, features[i])];
         }
         return value;
     };
 
-    // void td_0(const board& before, float target) {
-    //     board after = board(before);
-    //     int reward = after.slide(op);
-    //     float target = op == -1 ? 0 : estimate_value(after) + reward;
-    //     float error = target - estimate_value(before);
-    //     for (int i = 0; i < features.size(); i++) {
-    //         net[i][extract_feature(before, features[i])] += alpha * error;
-    //     }
-    // };
     typedef struct step {
         board state;
         board::reward reward;
@@ -135,14 +144,13 @@ class weight_agent : public agent {
         float current = estimate_value(last.state);
         float target = last.terminated ? last.reward : estimate_value(next) + last.reward;
         float error = target - current;
-        for (int i = 0; i < features.size(); i++) {
+        for (int i = 0; i < FEATURES_NUM; i++) {
             net[i][extract_feature(last.state, features[i])] += alpha * error;
         }
     };
 
     virtual action take_action(const board& before) {
-
-        if (! last_step.empty()){
+        if (!last_step.empty()) {
             td_0(last_step.back(), before);
             last_step.pop_back();
         }
@@ -174,7 +182,7 @@ class weight_agent : public agent {
    protected:
     virtual void init_weights(const std::string& info) {
         for (auto feature : features) {
-            net.emplace_back((int)std::pow(25, feature.size()));
+            net.emplace_back(myPow(25, feature.size()));
         }
         //		net.emplace_back(65536); // create an empty weight table with size 65536
         //		net.emplace_back(65536); // create an empty weight table with size 65536
@@ -233,86 +241,3 @@ class rndenv : public random_agent {
  * dummy player
  * select a legal action randomly
  */
-class dummy_player : public random_agent {
-   public:
-    dummy_player(const std::string& args = "")
-        : random_agent("name=dummy role=player " + args),
-          opcode({0, 1, 2, 3}),
-          mode(args) {}
-
-    virtual action take_action(const board& before) {
-        std::shuffle(opcode.begin(), opcode.end(), engine);
-        if (mode == "") {
-            for (int op : opcode) {
-                board::reward reward = board(before).slide(op);
-                if (reward != -1) return action::slide(op);
-            }
-            return action();
-        } else if (mode == "greedy") {
-            int max = 0;
-            int op_to_send = 0;
-            for (int op : opcode) {
-                board::reward reward = board(before).slide(op);
-                if (reward != -1 && reward >= max) {
-                    max = reward;
-                    op_to_send = op;
-                }
-            }
-            return action::slide(op_to_send);
-        } else if (mode == "heuristic") {
-            float max = 0;
-            int op_to_send = 0;
-            for (int op : opcode) {
-                float score = 0;
-                board after = board(before);
-                board::reward reward = after.slide(op);
-                if (reward != -1) {
-                    board::grid& tile = after;
-                    unsigned int max_elem = 0;
-                    int max_at_corner = 0, space_num = 0, monotonic_decreasing = 0, decreasing = 0;
-
-                    // check whether max element is at (0,0).
-                    for (int i = 0; i < 16; i++)
-                        max_elem = (after(i) > max_elem) ? after(i) : max_elem;
-                    max_at_corner = (after(0) == max_elem);
-
-                    // check # of space and row decreasing.
-                    for (auto& row : tile) {
-                        bool flag = 1, dflag = 1;
-                        for (int c = 0; c < 4; c++) {
-                            space_num += (row[c] == 0) ? 1 : 0;
-                            if (c < 3) {
-                                flag *= (row[c] >= row[c + 1]);
-                                dflag *= (row[c] > row[c + 1]);
-                            }
-                        }
-                        monotonic_decreasing += flag;
-                        decreasing += dflag;
-                    }
-                    // check column decreasing.
-                    for (int j = 0; j < 3; j++) {
-                        bool flag = 1, dflag = 1;
-                        for (int i = 0; i < 4; i++) {
-                            flag *= (tile[i][j] >= tile[i][j + 1]);
-                            dflag *= (tile[i][j] > tile[i][j + 1]);
-                        }
-                        monotonic_decreasing += flag;
-                        decreasing += dflag;
-                    }
-
-                    score = 1.0 * reward + 60.0 * max_at_corner + 0 * space_num + .27 * monotonic_decreasing - .05 * decreasing;
-                    if (score >= max) {
-                        max = score;
-                        op_to_send = op;
-                    }
-                }
-            }
-            return action::slide(op_to_send);
-        }
-        return action();
-    }
-
-   private:
-    std::array<int, 4> opcode;
-    std::string mode;
-};
