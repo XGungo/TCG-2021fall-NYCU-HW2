@@ -8,6 +8,8 @@
  */
 
 #pragma once
+#include <math.h>
+
 #include <algorithm>
 #include <fstream>
 #include <map>
@@ -86,8 +88,77 @@ class weight_agent : public agent {
             save_weights(meta["save"]);
     }
 
+    const std::vector<std::vector<int>> features = {
+        {0, 1, 2, 3},
+        {4, 5, 6, 7},
+        {8, 9, 10, 11},
+        {12, 13, 14, 15},
+        {0, 4, 8, 12},
+        {1, 5, 9, 13},
+        {2, 6, 10, 14},
+        {3, 7, 11, 15}};
+
+    int extract_feature(const board& after, std::vector<int> feature) {
+        int idx = 0;
+        for (int i = 0; i < feature.size(); i++) {
+            idx += after(feature[i]) * (int)std::pow(25, feature.size() - i - 1);
+        }
+        return idx;
+    };
+
+    float estimate_value(const board& after) {
+        if (check_for_win(after)) return 0;
+        float value = 0;
+        for (int i = 0; i < features.size(); i++) {
+            value += net[i][extract_feature(after, features[i])];
+        }
+        return value;
+    };
+
+    void td_0(const board& before, int op) {
+        board after = board(before);
+        int reward = after.slide(op);
+        float target = op == -1 ? 0 : estimate_value(after) + reward;
+        float error = target - estimate_value(before);
+        for (int i = 0; i < features.size(); i++) {
+            net[i][extract_feature(before, features[i])] += alpha * error;
+        }
+    };
+
+    virtual action take_action(const board& before) {
+        // std::cout << extract_feature(before, features[0]) << ' ';
+        // std::cout << net[0][extract_feature(before, features[0])] << '\n';
+
+        int best_op = -1;
+        float best_reward = -1;
+        float best_value = -100000;
+
+        for (int op : {0, 1, 2, 3}) {
+            board after = board(before);
+            int reward = after.slide(op);
+            // std::cout <<"op " << op << "reward " << reward<< '\n';
+            if (reward == -1) continue;
+            float value = estimate_value(after);
+            // std::cout <<"value " << value << "reward+value " << reward + value << '\n';
+
+            if (reward + value >= best_reward + best_value) {
+                best_op = op;
+                best_reward = reward;
+                best_value = value;
+            }
+        }
+        // std::cout << '\n';
+        td_0(before, best_op);
+        return action::slide(best_op);
+    };
+    virtual void open_episode(const std::string& flag = ""){};
+    virtual void close_episode(const std::string& flag = ""){};
+
    protected:
     virtual void init_weights(const std::string& info) {
+        for (auto feature : features) {
+            net.emplace_back((int)std::pow(25, feature.size()));
+        }
         //		net.emplace_back(65536); // create an empty weight table with size 65536
         //		net.emplace_back(65536); // create an empty weight table with size 65536
     }
@@ -113,7 +184,6 @@ class weight_agent : public agent {
     std::vector<weight> net;
     float alpha;
 };
-
 /**
  * random environment
  * add a new random tile to an empty cell
@@ -145,9 +215,9 @@ class rndenv : public random_agent {
  * dummy player
  * select a legal action randomly
  */
-class player : public random_agent {
+class dummy_player : public random_agent {
    public:
-    player(const std::string& args = "")
+    dummy_player(const std::string& args = "")
         : random_agent("name=dummy role=player " + args),
           opcode({0, 1, 2, 3}),
           mode(args) {}
