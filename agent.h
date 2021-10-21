@@ -21,7 +21,6 @@
 #include "action.h"
 #include "board.h"
 #include "weight.h"
-#define FEATURES_NUM 8
 
 class agent {
    public:
@@ -101,16 +100,58 @@ class weight_agent : public agent {
     //     {}
 
     // };
+
     const std::vector<std::vector<int>> features = {
-        {0, 1, 2, 3},
-        {4, 5, 6, 7},
-        {8, 9, 10, 11},
-        {12, 13, 14, 15},
-        {0, 4, 8, 12},
-        {1, 5, 9, 13},
-        {2, 6, 10, 14},
-        {3, 7, 11, 15}
+        {0, 4, 8, 12, 13},
+        {1, 5, 9, 13, 14},
+        {1, 5, 9, 6, 10},
+        {2, 6, 10, 7, 11},
+
+        {12, 13, 14, 15, 11},
+        {8, 9, 10, 11, 7},
+        {8, 9, 10, 6, 5},
+        {4, 5, 6, 2, 1},
+
+        {15, 11, 7, 3, 2},
+        {14, 10, 6, 2, 1},
+        {14, 10, 6, 5, 9},
+        {13, 9, 5, 8, 4},
+
+        {3, 2, 1, 0, 4},
+        {7, 6, 5, 4, 8},
+        {7, 6, 5, 9, 10},
+        {11, 10, 9, 13, 14},
+
+        {3, 7, 11, 15, 14},
+        {2, 6, 10, 14, 13},
+        {2, 6, 10, 9, 5},
+        {1, 5, 9, 8, 4},
+
+        {0, 1, 2, 3, 7},
+        {4, 5, 6, 7, 11},
+        {4, 5, 6, 9, 10},
+        {8, 9, 10, 13, 14},
+
+        {12, 8, 4, 0, 1},
+        {13, 9, 5, 1, 2},
+        {13, 9, 5, 6, 10},
+        {14, 10, 6, 7, 11},
+
+        {15, 14, 13, 12, 8},
+        {11, 10, 9, 8, 4},
+        {11, 10, 9, 5, 6},
+        {7, 6, 5, 1, 2}
     };
+    // const std::vector<std::vector<int>> features = {
+    //     {0, 1, 2, 3},
+    //     {4, 5, 6, 7},
+    //     {8, 9, 10, 11},
+    //     {12, 13, 14, 15},
+    //     {0, 4, 8, 12},
+    //     {1, 5, 9, 13},
+    //     {2, 6, 10, 14},
+    //     {3, 7, 11, 15}
+    // };
     int myPow(int x, unsigned int p) {
         if (p == 0) return 1;
         if (p == 1) return x;
@@ -135,7 +176,7 @@ class weight_agent : public agent {
 
     float estimate_value(const board& after) {
         float value = 0;
-        for (int i = 0; i < FEATURES_NUM; i++) {
+        for (long unsigned int i = 0; i < features.size(); i++) {
             value += net[i][extract_feature(after, features[i])];
         }
         return value;
@@ -148,25 +189,39 @@ class weight_agent : public agent {
 
     } Step;
 
-    void td_0(Step last, const board& next) {
+    void td_0(Step last, Step next) {
+        if (next.terminated){
+            float current = estimate_value(next.state);
+            float target = 0;
+            float error = target - current;
+            float adjust = alpha * error;
+            for (long unsigned int i = 0; i < features.size(); i++) {
+                net[i][extract_feature(next.state, features[i])] += adjust;
+            }
+        }
+
         float current = estimate_value(last.state);
-        float target = last.terminated ? last.reward : estimate_value(next) + last.reward;
+        float target = estimate_value(next.state) + next.reward;
         float error = target - current;
-        for (int i = 0; i < FEATURES_NUM; i++) {
-            net[i][extract_feature(last.state, features[i])] += alpha * error;
+        float adjust = alpha * error;
+        for (long unsigned int i = 0; i < features.size(); i++) {
+            net[i][extract_feature(last.state, features[i])] += adjust;
+        }
+    };
+    void td_0_backward(Step last, float target){
+        float current = estimate_value(last.state);
+        float error = target - current;
+        float adjust = alpha * error;
+        for (long unsigned int i = 0; i < features.size(); i++) {
+            net[i][extract_feature(last.state, features[i])] += adjust;
         }
     };
 
     virtual action take_action(const board& before) {
-        if (!last_step.empty()) {
-            td_0(last_step.back(), before);
-            last_step.pop_back();
-        }
-
         int best_op = -1;
         int best_reward = -1;
         float best_value = -100000;
-
+        board best_after = before;
         for (int op : {0, 1, 2, 3}) {
             board after = board(before);
             board::reward reward = after.slide(op);
@@ -176,16 +231,29 @@ class weight_agent : public agent {
                 best_op = op;
                 best_reward = reward;
                 best_value = value;
+                best_after = after;
             }
         }
-        Step last = {before, best_reward, best_op == -1};
-        last_step.emplace_back(last);
+        if(best_op != -1) history.push_back({best_after, best_reward, best_op == -1});
+        // if (history.size() == 2) {
+        //     td_0(history.front(), history.back());
+        //     history.erase(history.begin());
+        // }
         return action::slide(best_op);
     };
     virtual void open_episode(const std::string& flag = "") {
-        last_step.clear();
+        history.clear();
     };
-    virtual void close_episode(const std::string& flag = ""){};
+    virtual void close_episode(const std::string& flag = ""){
+        if (history.empty() || alpha == 0) return;
+        auto h = history.end()-1;
+        td_0_backward(*h, 0);
+
+        for (h--; h != history.begin() - 1; h--) {
+            float target = (h + 1)->reward + estimate_value((h + 1)->state);
+            td_0_backward(*h, target);
+        }
+    };
 
    protected:
     virtual void init_weights(const std::string& info) {
@@ -216,7 +284,7 @@ class weight_agent : public agent {
    protected:
     std::vector<weight> net;
     float alpha;
-    std::vector<Step> last_step;
+    std::vector<Step> history;
 };
 /**
  * random environment
