@@ -68,6 +68,20 @@ class board {
   }
 
  public:
+  int max(){
+      int max = 0;
+      for (auto row : tile)
+        for(auto t : row)
+            if (t > max) max = t;
+      return max;
+  }
+  int second_max() {
+      int second_max = 0;
+      for (auto row : tile)
+          for (auto t : row)
+              if (t > second_max and t < this->max()) second_max = t;
+      return second_max;
+  }
   grid getTile() { return tile; }
   /**
    * place a tile (index value) to the specific position (1-d form index)

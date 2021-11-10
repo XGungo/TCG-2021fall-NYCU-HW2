@@ -1,4 +1,4 @@
-TCG 2021 Project 2 Judger V20211012
+TCG 2021 Project 2 Judger V20211022
 The provided judger, 2584-judge, can only be executed in the Linux environment.
 
 Before running the judger, make sure that it remains executable:

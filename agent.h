@@ -88,18 +88,6 @@ class weight_agent : public agent {
             save_weights(meta["save"]);
     }
 
-    // const std::vector<std::vector<int>> features = {
-    //     {0, 1, 2, 4, 8},
-    //     {0, 1, 2, 5, 9},
-    //     {0, 1, 2, 6, 10},
-
-    //     {1, 2, 3, 5, 9},
-    //     {1, 2, 3, 6, 10},
-    //     {1, 2, 3, 7, 11},
-
-    //     {}
-
-    // };
 
     const std::vector<std::vector<int>> features = {
         {0, 4, 8, 12, 13},
@@ -142,16 +130,7 @@ class weight_agent : public agent {
         {11, 10, 9, 5, 6},
         {7, 6, 5, 1, 2}
     };
-    // const std::vector<std::vector<int>> features = {
-    //     {0, 1, 2, 3},
-    //     {4, 5, 6, 7},
-    //     {8, 9, 10, 11},
-    //     {12, 13, 14, 15},
-    //     {0, 4, 8, 12},
-    //     {1, 5, 9, 13},
-    //     {2, 6, 10, 14},
-    //     {3, 7, 11, 15}
-    // };
+
     int myPow(int x, unsigned int p) {
         if (p == 0) return 1;
         if (p == 1) return x;
@@ -164,9 +143,7 @@ class weight_agent : public agent {
     }
     int extract_feature(const board& after, std::vector<int> feature) {
         int idx = 0;
-        // for (long unsigned int i = 0; i < feature.size(); i++) {
-        //     idx += after(feature[i]) * myPow(25, feature.size() - i - 1);
-        // }
+
         for (long unsigned int i = 0; i < feature.size(); i++) {
             idx *= 25;
             idx += after(feature[i]);
@@ -174,46 +151,33 @@ class weight_agent : public agent {
         return idx;
     };
 
-    float estimate_value(const board& after) {
+    float estimate_value(const board& after, int breakpoint_idx) {
         float value = 0;
+        int stage = breakpoint_idx * features.size();
         for (long unsigned int i = 0; i < features.size(); i++) {
-            value += net[i][extract_feature(after, features[i])];
+            value += net[stage + i][extract_feature(after, features[i])];
         }
         return value;
     };
+    std::vector<int> breakpoints = {19, 20};
 
     typedef struct step {
         board state;
         board::reward reward;
-        bool terminated;
+        int breakpoint;
 
     } Step;
 
-    void td_0(Step last, Step next) {
-        if (next.terminated){
-            float current = estimate_value(next.state);
-            float target = 0;
-            float error = target - current;
-            float adjust = alpha * error;
-            for (long unsigned int i = 0; i < features.size(); i++) {
-                net[i][extract_feature(next.state, features[i])] += adjust;
-            }
-        }
-
-        float current = estimate_value(last.state);
-        float target = estimate_value(next.state) + next.reward;
+   
+    void td_0_backward(Step last, Step next){
+        float target = next.reward + estimate_value(next.state, next.breakpoint);
+        if (last.state == next.state) target = 0;
+        float current = estimate_value(last.state, last.breakpoint);
         float error = target - current;
         float adjust = alpha * error;
+        int stage = last.breakpoint * features.size();
         for (long unsigned int i = 0; i < features.size(); i++) {
-            net[i][extract_feature(last.state, features[i])] += adjust;
-        }
-    };
-    void td_0_backward(Step last, float target){
-        float current = estimate_value(last.state);
-        float error = target - current;
-        float adjust = alpha * error;
-        for (long unsigned int i = 0; i < features.size(); i++) {
-            net[i][extract_feature(last.state, features[i])] += adjust;
+            net[i + stage][extract_feature(last.state, features[i])] += adjust;
         }
     };
 
@@ -222,11 +186,19 @@ class weight_agent : public agent {
         int best_reward = -1;
         float best_value = -100000;
         board best_after = before;
+        int breakpoint_idx = 0;
+        for (auto breakpoint : breakpoints) {
+            if (best_after.max() < breakpoint){
+                break;
+            }
+            breakpoint_idx++;
+        }
+        if (breakpoint_idx == 1 and best_after.second_max() >= breakpoints[0]) breakpoint_idx++;
         for (int op : {0, 1, 2, 3}) {
             board after = board(before);
             board::reward reward = after.slide(op);
             if (reward == -1) continue;
-            float value = estimate_value(after);
+            float value = estimate_value(after, breakpoint_idx);
             if (reward + value >= best_reward + best_value) {
                 best_op = op;
                 best_reward = reward;
@@ -234,7 +206,7 @@ class weight_agent : public agent {
                 best_after = after;
             }
         }
-        if(best_op != -1) history.push_back({best_after, best_reward, best_op == -1});
+        if(best_op != -1) history.push_back({best_after, best_reward, breakpoint_idx});
         // if (history.size() == 2) {
         //     td_0(history.front(), history.back());
         //     history.erase(history.begin());
@@ -247,19 +219,21 @@ class weight_agent : public agent {
     virtual void close_episode(const std::string& flag = ""){
         if (history.empty() || alpha == 0) return;
         auto h = history.end()-1;
-        td_0_backward(*h, 0);
+        td_0_backward(*h, *h);
 
         for (h--; h != history.begin() - 1; h--) {
-            float target = (h + 1)->reward + estimate_value((h + 1)->state);
-            td_0_backward(*h, target);
+            td_0_backward(*h, *(h + 1));
         }
     };
 
    protected:
     virtual void init_weights(const std::string& info) {
-        for (auto feature : features) {
-            net.emplace_back(myPow(25, feature.size()));
+        for (int i = 0; i < breakpoints.size() * 2 - 1; i++) {
+            for (auto feature : features) {
+                net.emplace_back(myPow(25, feature.size()));
+            }
         }
+
         //		net.emplace_back(65536); // create an empty weight table with size 65536
         //		net.emplace_back(65536); // create an empty weight table with size 65536
     }
