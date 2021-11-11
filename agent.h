@@ -171,7 +171,7 @@ class weight_agent : public agent {
    
     void td_0_backward(Step last, Step next){
         float target = next.reward + estimate_value(next.state, next.breakpoint);
-        if (last.state == next.state) target = 0;
+        if (last.state == next.state || last.breakpoint != next.breakpoint) target = 0;
         float current = estimate_value(last.state, last.breakpoint);
         float error = target - current;
         float adjust = alpha * error;
