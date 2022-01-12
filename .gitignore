@@ -6,3 +6,5 @@
 *.sh
 .nfs*
 *.log
+cmake-build-debug
+model

@@ -12,3 +12,4 @@ add_executable(2584 2584.cpp)
 find_package(Torch REQUIRED)
 target_link_libraries(2584 "${TORCH_LIBRARIES}")
 set_property(TARGET 2584 PROPERTY CXX_STANDARD 20)
+

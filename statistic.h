@@ -32,7 +32,8 @@ public:
 		  limit(limit ? limit : total),
 		  count(0) {}
 
-public:
+  size_t count;
+ public:
 	/**
 	 * show the statistic of last 'block' games
 	 *
@@ -151,6 +152,5 @@ private:
 	size_t total;
 	size_t block;
 	size_t limit;
-	size_t count;
-	std::list<episode> data;
+  std::list<episode> data;
 };

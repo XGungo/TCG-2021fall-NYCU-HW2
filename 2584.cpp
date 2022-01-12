@@ -16,6 +16,8 @@
 #include "agent.h"
 #include "episode.h"
 #include "statistic.h"
+#include <torch/torch.h>
+#include <torch/script.h>
 
 int main(int argc, const char* argv[]) {
 	std::cout << "2048-Demo: ";
@@ -55,10 +57,9 @@ int main(int argc, const char* argv[]) {
 		in.close();
 		summary |= stat.is_finished();
 	}
-
-	weight_agent play(play_args);
+    auto net = torch::jit::load("model/basic.pt");
+	deep_agent play(net, play_args);
 	rndenv evil(evil_args);
-
 	while (!stat.is_finished()) {
 		play.open_episode("~:" + evil.name());
 		evil.open_episode(play.name() + ":~");
@@ -76,6 +77,9 @@ int main(int argc, const char* argv[]) {
 
 		play.close_episode(win.name());
 		evil.close_episode(win.name());
+        if(stat.count != 0 && stat.count%100 == 0){
+          net.save("model/"+std::to_string(stat.count)+".pt");
+        }
 	}
 
 	if (summary) {

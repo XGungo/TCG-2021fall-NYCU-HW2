@@ -14,14 +14,21 @@
 #include <fstream>
 #include <map>
 #include <random>
+#include <ranges>
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <cfloat>
 
+#include <torch/torch.h>
 #include "action.h"
 #include "board.h"
 #include "weight.h"
 
+#define n_ft_elem 5
+#define n_ft 4*8
+#define EPS 0.2
+#define GAMMA (float)0.99
 class agent {
    public:
     agent(const std::string& args = "") {
@@ -213,10 +220,10 @@ class weight_agent : public agent {
         // }
         return action::slide(best_op);
     };
-    virtual void open_episode(const std::string& flag = "") {
+    void open_episode(const std::string& flag) override {
         history.clear();
     };
-    virtual void close_episode(const std::string& flag = ""){
+    void close_episode(const std::string& flag) override{
         if (history.empty() || alpha == 0) return;
         auto h = history.end()-1;
         td_0_backward(*h, *h);
@@ -291,3 +298,207 @@ class rndenv : public random_agent {
  * dummy player
  * select a legal action randomly
  */
+class deep_agent : public agent {
+ public:
+  explicit deep_agent(torch::jit::Module& nnet, const std::string& args = "") : agent(args), nnet(nnet){
+    std::random_device rd;
+    engine.seed(rd());
+    ops = {0, 1, 2, 3};
+  }
+  ~deep_agent() override {}
+
+
+  const std::vector<std::vector<int>> features ={
+      {0, 4, 8, 12, 13},
+      {1, 5, 9, 13, 14},
+      {1, 5, 9, 6, 10},
+      {2, 6, 10, 7, 11},
+
+      {12, 13, 14, 15, 11},
+      {8, 9, 10, 11, 7},
+      {8, 9, 10, 6, 5},
+      {4, 5, 6, 2, 1},
+
+      {15, 11, 7, 3, 2},
+      {14, 10, 6, 2, 1},
+      {14, 10, 6, 5, 9},
+      {13, 9, 5, 8, 4},
+
+      {3, 2, 1, 0, 4},
+      {7, 6, 5, 4, 8},
+      {7, 6, 5, 9, 10},
+      {11, 10, 9, 13, 14},
+
+      {3, 7, 11, 15, 14},
+      {2, 6, 10, 14, 13},
+      {2, 6, 10, 9, 5},
+      {1, 5, 9, 8, 4},
+
+      {0, 1, 2, 3, 7},
+      {4, 5, 6, 7, 11},
+      {4, 5, 6, 9, 10},
+      {8, 9, 10, 13, 14},
+
+      {12, 8, 4, 0, 1},
+      {13, 9, 5, 1, 2},
+      {13, 9, 5, 6, 10},
+      {14, 10, 6, 7, 11},
+
+      {15, 14, 13, 12, 8},
+      {11, 10, 9, 8, 4},
+      {11, 10, 9, 5, 6},
+      {7, 6, 5, 1, 2}
+  };
+
+  int myPow(int x, unsigned int p) {
+    if (p == 0) return 1;
+    if (p == 1) return x;
+
+    int tmp = myPow(x, p / 2);
+    if (p % 2 == 0)
+      return tmp * tmp;
+    else
+      return x * tmp * tmp;
+  }
+
+  torch::Tensor board_to_tensor(const board& state){
+    std::array<std::array<int, n_ft_elem>, n_ft> feature_map = {};
+    for(int i = 0; auto & feature : features){
+      std::transform(feature.begin(), feature.end(), feature_map[i].begin(), [&state](int i){return board::fib(state(i));});
+      i++;
+    }
+    auto result = torch::from_blob(feature_map.data(), {n_ft, n_ft_elem}, torch::kInt).clone().toType(torch::kFloat);
+    return result;
+  }
+
+  torch::Tensor estimate_value(const board& state, torch::jit::Module & net) {
+    std::vector<torch::IValue> input = {board_to_tensor(state)};
+    net.eval();
+    auto value = net.forward(input).toTensor();
+    return value;
+  };
+  std::vector<int> breakpoints = {19, 20};
+
+  struct Step {
+    board state;
+    board::reward reward;
+  };
+
+
+  float td_0_backward(Step last, Step next, torch::jit::Module &pnet){
+    std::vector<torch::Tensor> parameters;
+
+    _getModuleParams(parameters, nnet);
+    torch::optim::Adam adam(parameters, torch::optim::AdamOptions(0.02).weight_decay(1e-4));
+    adam.zero_grad();
+    auto target = next.reward + ((last.state == next.state) ? 0 : 0.99) * estimate_value(next.state, pnet);
+    auto current = estimate_value(last.state, pnet);
+    auto loss = (target - current).pow(2);
+    loss.backward();
+    adam.step();
+    nnet.eval();
+    return loss.item<float>();
+  };
+  float td_0_backward(Step last, float target, torch::jit::Module &pnet){
+    std::vector<torch::Tensor> parameters;
+
+    _getModuleParams(parameters, nnet);
+    torch::optim::Adam adam(parameters, torch::optim::AdamOptions(0.02).weight_decay(1e-4));
+    adam.zero_grad();
+    auto current = estimate_value(last.state, pnet);
+    auto loss = (current - target).pow(2);
+    loss.backward();
+    adam.step();
+    nnet.eval();
+    return loss.item<float>();
+  };
+  static void _getModuleParams(std::vector<torch::Tensor> &parameters, const torch::jit::script::Module &module) {
+    for (const auto &params : module.parameters()) {
+      parameters.push_back(params);
+    }
+  }
+  float td_0_forward(board last, float reward, board next){
+    torch::InferenceMode guard(false);
+    std::vector<torch::Tensor> parameters;
+
+    _getModuleParams(parameters, nnet);
+    torch::optim::Adam adam(parameters, torch::optim::AdamOptions(0.02).weight_decay(1e-4));
+    adam.zero_grad();
+    auto target = reward + estimate_value(next, nnet);
+    if (last == next) target[0] = 0;
+    auto current = estimate_value(last, nnet);
+    auto loss = (target - current).pow(2);
+    loss.backward();
+    adam.step();
+    nnet.eval();
+    return loss.item<float>();
+  };
+
+  virtual action take_action(const board& before) {
+    torch::InferenceMode guard(true);
+
+    int best_op = -1;
+    int best_reward = -1;
+    double best_value = DBL_MIN;
+    board best_after = before;
+
+    std::array<float,4> values;
+    std::array<board::reward,4> rewards;
+    for (int op : ops) {
+      board after = board(before);
+      rewards[op] = after.slide(op);
+      if (rewards[op] == -1) continue;
+      values[op] = estimate_value(after, nnet).item<float>();
+      if (rewards[op] + values[op] >= best_reward + best_value) {
+        best_op = op;
+        best_reward = rewards[op];
+        best_value = values[op];
+        best_after = after;
+      }
+    }
+    std::uniform_real_distribution<float> unif(0.0, 1.0);
+    if(unif(engine) < EPS){
+      std::shuffle(ops.begin(), ops.end(), engine);
+      for (int op : ops) {
+        board after = board(before);
+        if (rewards[op] == -1) continue;
+        best_op = op;
+        best_reward = rewards[op];
+        best_after = after;
+        break;
+      }
+    }
+    if(best_op != -1) history.push_back({best_after, best_reward});
+//    if(best_op != -1){
+//      td_0_forward(before, best_reward, best_after);
+//    }
+    return action::slide(best_op);
+  };
+  void open_episode(const std::string& flag) override {
+    history.clear();
+  };
+  void close_episode(const std::string& flag) override{
+    if (history.empty()) return;
+    auto pnet = nnet;
+    float total_loss = 0;
+    float target = 0;
+//    auto h = history.end()-1;
+//    total_loss += td_0_backward(*h, *h, pnet);
+//
+//    for (h--; h != history.begin() - 1; h--) {
+//      total_loss += td_0_backward(*h, *(h + 1), pnet);
+//    }
+      for(auto & h : std::ranges::reverse_view(history)){
+        td_0_backward(h, target, pnet);
+        target += GAMMA * (float)h.reward;
+
+      }
+//    std::cout << "Loss: " << total_loss/(float)history.size() << '\n';
+  };
+ protected:
+  torch::jit::Module & nnet;
+  std::vector<Step> history;
+  std::default_random_engine engine;
+  std::array<unsigned int,4> ops;
+
+};
