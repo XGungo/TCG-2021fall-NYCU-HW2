@@ -364,7 +364,7 @@ class deep_agent : public agent {
   torch::Tensor board_to_tensor(const board& state){
     std::array<std::array<int, n_ft_elem>, n_ft> feature_map = {};
     for(int i = 0; auto & feature : features){
-      std::transform(feature.begin(), feature.end(), feature_map[i].begin(), [&state](int i){return board::fib(state(i));});
+      std::transform(feature.begin(), feature.end(), feature_map[i].begin(), [&state](int i){return state(i);});
       i++;
     }
     auto result = torch::from_blob(feature_map.data(), {n_ft, n_ft_elem}, torch::kInt).clone().toType(torch::kFloat);
@@ -391,9 +391,9 @@ class deep_agent : public agent {
     _getModuleParams(parameters, nnet);
     torch::optim::Adam adam(parameters, torch::optim::AdamOptions(0.02).weight_decay(1e-4));
     adam.zero_grad();
-    auto target = next.reward + ((last.state == next.state) ? 0 : 0.99) * estimate_value(next.state, pnet);
+    auto target = next.reward + ((last.state == next.state) ? 0 : 0.99) * estimate_value(next.state, pnet).sum().item<float>();
     auto current = estimate_value(last.state, pnet);
-    auto loss = (target - current).pow(2);
+    auto loss = (target - current).pow(2).sum();
     loss.backward();
     adam.step();
     nnet.eval();
@@ -406,7 +406,7 @@ class deep_agent : public agent {
     torch::optim::Adam adam(parameters, torch::optim::AdamOptions(0.02).weight_decay(1e-4));
     adam.zero_grad();
     auto current = estimate_value(last.state, pnet);
-    auto loss = (current - target).pow(2);
+    auto loss = (current - target).pow(2).sum();
     loss.backward();
     adam.step();
     nnet.eval();
@@ -442,13 +442,14 @@ class deep_agent : public agent {
     double best_value = DBL_MIN;
     board best_after = before;
 
-    std::array<float,4> values;
-    std::array<board::reward,4> rewards;
+    std::array<float,4> values = {0};
+    std::array<board::reward,4> rewards = {0};
     for (int op : ops) {
       board after = board(before);
       rewards[op] = after.slide(op);
       if (rewards[op] == -1) continue;
-      values[op] = estimate_value(after, nnet).item<float>();
+      values[op] = estimate_value(after, nnet).sum().item<float>();
+//      std::cout << values[op] << ' ';
       if (rewards[op] + values[op] >= best_reward + best_value) {
         best_op = op;
         best_reward = rewards[op];
@@ -456,6 +457,7 @@ class deep_agent : public agent {
         best_after = after;
       }
     }
+//    std::cout << '\n';
     std::uniform_real_distribution<float> unif(0.0, 1.0);
     if(unif(engine) < EPS){
       std::shuffle(ops.begin(), ops.end(), engine);
@@ -488,9 +490,9 @@ class deep_agent : public agent {
 //    for (h--; h != history.begin() - 1; h--) {
 //      total_loss += td_0_backward(*h, *(h + 1), pnet);
 //    }
-      for(auto & h : std::ranges::reverse_view(history)){
-        td_0_backward(h, target, pnet);
-        target += GAMMA * (float)h.reward;
+      for(auto h = history.rbegin(); h != history.rend(); h++){
+        td_0_backward(*h, target, pnet);
+        target += GAMMA * (float)h->reward;
 
       }
 //    std::cout << "Loss: " << total_loss/(float)history.size() << '\n';
